@@ -423,15 +423,11 @@ def filter_key_from_frozen_dict(
     frozen_dict, key: str):
   """Filters (removes) an item by key from a FrozenDict or dict."""
   if key in frozen_dict:
-    if hasattr(frozen_dict, 'pop') and callable(getattr(frozen_dict, 'pop')):
+    if isinstance(frozen_dict, flax.core.FrozenDict):
       # FrozenDict.pop returns (new_dict, value)
-      result = frozen_dict.pop(key)
-      if isinstance(result, tuple):
-        frozen_dict = result[0]
-      else:
-        frozen_dict = result
+      frozen_dict, _ = frozen_dict.pop(key)
     else:
-      frozen_dict = {k: v for k, v in frozen_dict.items() if k != key}
+      frozen_dict.pop(key)
   return frozen_dict
 
 

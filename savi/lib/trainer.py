@@ -165,8 +165,8 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
         padding_mask=jnp.ones(init_inputs.shape[:-1], jnp.int32))
 
     # Split into state variables (e.g. for batchnorm stats) and model params.
-    # Note that `pop()` on a FrozenDict performs a deep copy.
-    state_vars, initial_params = initial_vars.pop("params")  # pytype: disable=attribute-error
+    initial_params = initial_vars.pop("params")
+    state_vars = initial_vars
 
     # Filter out intermediates (we don't want to store these in the TrainState).
     state_vars = utils.filter_key_from_frozen_dict(
