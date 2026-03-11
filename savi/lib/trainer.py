@@ -43,8 +43,11 @@ ArrayTree = Union[Array, Iterable["ArrayTree"], Mapping[str, "ArrayTree"]]  # py
 PRNGKey = Array
 
 
+# Module-level variable set by train_and_evaluate before pmap.
+_tx = None
+
+
 def train_step(
-    tx: optax.GradientTransformation,
     model: nn.Module,
     rng: PRNGKey,
     step: int,
@@ -61,6 +64,7 @@ def train_step(
     ) -> Tuple[Dict[str, ArrayTree], optax.OptState, Dict[str, ArrayTree],
                PRNGKey, metrics.Collection, int]:
   """Perform a single training step."""
+  tx = _tx
 
   # Split PRNGKey and bind to host / device.
   new_rng, rng = jax.random.split(rng)
@@ -203,8 +207,10 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
       num_train_steps=config.num_train_steps, writer=writer)
   if jax.process_index() == 0:
     profiler = periodic_actions.Profile(num_profile_steps=5, logdir=workdir)
+  global _tx
+  _tx = tx
   p_train_step = jax.pmap(
-      functools.partial(train_step, tx=tx),
+      train_step,
       axis_name="batch",
       donate_argnums=(1, 2, 3, 4, 5),
       static_broadcasted_argnums=(0, 7, 8, 9, 10, 11, 12))
