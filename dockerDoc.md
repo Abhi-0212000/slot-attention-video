@@ -4,7 +4,7 @@
 Clone the repo and enter the directory:
 
 ```bash
-git clone https://github.com/<YOUR_GITHUB_USER>/slot-attention-video.git
+git clone https://github.com/Abhi-0212000/slot-attention-video.git
 cd slot-attention-video
 git checkout cuda12-compat
 ```

@@ -74,7 +74,7 @@ def get_eval_metrics(
 
 def eval_first_step(
     model: nn.Module,
-    state_variables: flax.core.FrozenDict,
+    state_variables: Dict[str, ArrayTree],
     params: Dict[str, ArrayTree],
     batch: Dict[str, Array],
     rng: PRNGKey,
@@ -115,7 +115,7 @@ def eval_first_step(
 
 def eval_continued_step(
     model: nn.Module,
-    state_variables: flax.core.FrozenDict,
+    state_variables: Dict[str, ArrayTree],
     params: Dict[str, ArrayTree],
     batch: Dict[str, Array],
     rng: PRNGKey,
@@ -204,9 +204,9 @@ def eval_step(
     batch_slice = utils.get_slices_along_axis(
         batch, slice_keys=slice_keys, start_idx=0, end_idx=slice_size)
     preds_slice = p_eval_first_step(model, state.variables,
-                                    state.optimizer.target, batch_slice, rng,
+                                    state.params, batch_slice, rng,
                                     conditioning_key)
-    preds_slice = jax.tree_map(np.asarray, preds_slice)  # Copy to CPU.
+    preds_slice = jax.tree.map(np.asarray, preds_slice)  # Copy to CPU.
     preds_per_slice.append(preds_slice)
 
     # Iterate over remaining slices (re-using the previous recurrent state).
@@ -216,9 +216,9 @@ def eval_step(
           batch, slice_keys=slice_keys, start_idx=slice_idx * slice_size,
           end_idx=(slice_idx + 1) * slice_size)
       preds_slice = p_eval_continued_step(
-          model, state.variables, state.optimizer.target,
+          model, state.variables, state.params,
           batch_slice, rng, recurrent_states)
-      preds_slice = jax.tree_map(np.asarray, preds_slice)  # Copy to CPU.
+      preds_slice = jax.tree.map(np.asarray, preds_slice)  # Copy to CPU.
       preds_per_slice.append(preds_slice)
 
     # Remove states from predictions before concat to save memory.
@@ -228,16 +228,16 @@ def eval_step(
 
     # Join predictions along sequence dimension.
     concat_fn = lambda _, *x: functools.partial(np.concatenate, axis=2)([*x])
-    preds = jax.tree_map(concat_fn, preds_per_slice[0], *preds_per_slice)
+    preds = jax.tree.map(concat_fn, preds_per_slice[0], *preds_per_slice)
 
     # Truncate to original sequence length.
     # NOTE: This op assumes that all predictions have a (complete) time axis.
-    preds = jax.tree_map(lambda x: x[:, :, :seq_len], preds)
+    preds = jax.tree.map(lambda x: x[:, :, :seq_len], preds)
 
   # Evaluate on full sequence if no (or too large) slice size is provided.
   else:
     preds = p_eval_first_step(model, state.variables,
-                              state.optimizer.target, batch, rng,
+                              state.params, batch, rng,
                               conditioning_key)
     for k in remove_from_predictions:
       _ = preds.pop(k, None)
@@ -296,7 +296,7 @@ def evaluate(
     rng, eval_rng = jax.random.split(rng)
     eval_rng = jax.random.fold_in(eval_rng, jax.process_index())  # Bind to host.
     eval_rngs = jax.random.split(eval_rng, jax.local_device_count())
-    batch = jax.tree_map(np.asarray, batch)
+    batch = jax.tree.map(np.asarray, batch)
     preds = eval_step(
         model=model,
         state=state,
@@ -311,8 +311,8 @@ def evaluate(
 
     if metrics_on_cpu:
       # Reshape replica dim and batch-dims to work with metric_devices.
-      preds = jax.tree_map(reshape_fn, preds)
-      batch = jax.tree_map(reshape_fn, batch)
+      preds = jax.tree.map(reshape_fn, preds)
+      batch = jax.tree.map(reshape_fn, batch)
     # Get metric updates.
     update = p_get_eval_metrics(preds, batch, loss_fn, eval_metrics_cls,
                                 predicted_max_num_instances,

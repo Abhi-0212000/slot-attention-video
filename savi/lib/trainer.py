@@ -45,47 +45,22 @@ PRNGKey = Array
 
 def train_step(
     model: nn.Module,
+    tx: optax.GradientTransformation,
     rng: PRNGKey,
     step: int,
-    state_vars: flax.core.FrozenDict,
-    opt: flax.optim.Optimizer,  # pytype: disable=module-attr
+    state_vars: Dict[str, ArrayTree],
+    params: Dict[str, ArrayTree],
+    opt_state: optax.OptState,
     batch: Dict[str, ArrayTree],
     loss_fn: losses.LossFn,
-    learning_rate_fn: Callable[[Array], Array],
     train_metrics_cls: Type[metrics.Collection],
     predicted_max_num_instances: int,
     ground_truth_max_num_instances: int,
     conditioning_key: Optional[str] = None,
     max_grad_norm: Optional[float] = None,
-    ) -> Tuple[flax.optim.Optimizer, flax.core.FrozenDict, PRNGKey,  # pytype: disable=module-attr
-               metrics.Collection, int]:
-  """Perform a single training step.
-
-  Args:
-    model: Model used in training step.
-    rng: Random number key
-    step: Which training step we are on.
-    state_vars: Accessory variables.
-    opt: The optimizer to use to minimize loss_fn.
-    batch: Training inputs for this step.
-    loss_fn: Loss function that takes model predictions and a batch of data.
-    learning_rate_fn: Function that outputs learning rate as jnp.float32 given
-      step as jnp.int*.
-    train_metrics_cls: The metrics collection for computing training metrics.
-    predicted_max_num_instances: Maximum number of instances in prediction.
-    ground_truth_max_num_instances: Maximum number of instances in ground truth,
-      including background (which counts as a separate instance).
-    conditioning_key: Optional string. If provided, defines the batch key to be
-      used as conditioning signal for the model. Otherwise this is inferred from
-      the available keys in the batch.
-    max_grad_norm: Optional float, if not None, clip gradients to the specified
-      maximum norm.
-
-  Returns:
-    Tuple of the updated opt, state_vars, new random number key,
-      metrics update, and step + 1. Note that some of this info is stored in
-      TrainState, but here it is unpacked.
-  """
+    ) -> Tuple[Dict[str, ArrayTree], optax.OptState, Dict[str, ArrayTree],
+               PRNGKey, metrics.Collection, int]:
+  """Perform a single training step."""
 
   # Split PRNGKey and bind to host / device.
   new_rng, rng = jax.random.split(rng)
@@ -110,7 +85,7 @@ def train_step(
     return loss, (state_vars, preds, loss_aux)
 
   grad_fn = jax.value_and_grad(train_loss_fn, has_aux=True)
-  (loss, (state_vars, preds, loss_aux)), grad = grad_fn(opt.target, state_vars)
+  (loss, (state_vars, preds, loss_aux)), grad = grad_fn(params, state_vars)
 
   # Compute average gradient across multiple workers.
   grad = jax.lax.pmean(grad, axis_name="batch")
@@ -118,9 +93,8 @@ def train_step(
   if max_grad_norm is not None:
     grad = utils.clip_grads(grad, max_grad_norm)
 
-  # Subtracting 1 from step as we start from initial step 1 instead of 0.
-  learning_rate = learning_rate_fn(step - 1)
-  opt = opt.apply_gradient(grad, learning_rate=learning_rate)
+  updates, opt_state = tx.update(grad, opt_state, params)
+  params = optax.apply_updates(params, updates)
 
   # Compute metrics.
   metrics_update = train_metrics_cls.gather_from_model_output(
@@ -133,7 +107,7 @@ def train_step(
       ground_truth_max_num_instances=ground_truth_max_num_instances,
       padding_mask=batch.get("padding_mask"),
       mask=batch.get("mask"))
-  return opt, state_vars, new_rng, metrics_update, step + 1
+  return params, opt_state, state_vars, new_rng, metrics_update, step + 1
 
 
 def train_and_evaluate(config: ml_collections.ConfigDict,
@@ -166,7 +140,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
       peak_value=config.learning_rate,
       warmup_steps=config.warmup_steps,
       decay_steps=config.num_train_steps)
-  optimizer_def = flax.optim.Adam(learning_rate=config.learning_rate)  # pytype: disable=module-attr
+  tx = optax.adam(learning_rate=learning_rate_fn)
 
   # Construct TrainMetrics and EvalMetrics, metrics collections.
   train_metrics_cls = utils.make_metrics_collection("TrainMetrics",
@@ -201,10 +175,11 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
 
   state_vars, initial_params = init_model(rng)
   parameter_overview.log_parameter_overview(initial_params)  # pytype: disable=wrong-arg-types
-  optimizer = optimizer_def.create(initial_params)
+  opt_state = tx.init(initial_params)
 
   state = utils.TrainState(
-      step=1, optimizer=optimizer, rng=rng, variables=state_vars)
+      step=1, params=initial_params, opt_state=opt_state,
+      rng=rng, variables=state_vars)
 
   loss_fn = functools.partial(
       losses.compute_full_loss, loss_config=config.losses)
@@ -229,10 +204,10 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
   if jax.process_index() == 0:
     profiler = periodic_actions.Profile(num_profile_steps=5, logdir=workdir)
   p_train_step = jax.pmap(
-      train_step,
+      functools.partial(train_step, tx=tx),
       axis_name="batch",
       donate_argnums=(1, 2, 3, 4, 5),
-      static_broadcasted_argnums=(0, 6, 7, 8, 9, 10, 11, 12))
+      static_broadcasted_argnums=(0, 7, 8, 9, 10, 11, 12))
 
   train_metrics = None
   with metric_writers.ensure_flushes(writer):
@@ -249,18 +224,20 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
       is_last_step = step == config.num_train_steps
 
       with jax.profiler.StepTraceAnnotation("train", step_num=step):
-        batch = jax.tree_map(np.asarray, next(train_iter))
-        opt, state_vars, rng, metrics_update, p_step = p_train_step(
-            model, state.rng, state.step, state.variables,
-            state.optimizer, batch, loss_fn, learning_rate_fn,
-            train_metrics_cls,
-            config.num_slots,
-            config.max_instances + 1,  # Incl. background.
-            config.get("conditioning_key"),
-            config.get("max_grad_norm"))
+        batch = jax.tree.map(np.asarray, next(train_iter))
+        params, opt_state, state_vars, rng, metrics_update, p_step = (
+            p_train_step(
+                model, state.rng, state.step, state.variables,
+                state.params, state.opt_state, batch, loss_fn,
+                train_metrics_cls,
+                config.num_slots,
+                config.max_instances + 1,  # Incl. background.
+                config.get("conditioning_key"),
+                config.get("max_grad_norm")))
 
         state = state.replace(  # pytype: disable=attribute-error
-            optimizer=opt,
+            params=params,
+            opt_state=opt_state,
             step=p_step,
             variables=state_vars,
             rng=rng,
@@ -280,7 +257,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
 
       if step % config.log_loss_every_steps == 0 or is_last_step:
         metrics_res = train_metrics.compute()
-        writer.write_scalars(step, jax.tree_map(np.array, metrics_res))
+        writer.write_scalars(step, jax.tree.map(np.array, metrics_res))
         train_metrics = None
 
       if step % config.eval_every_steps == 0 or is_last_step:
@@ -312,10 +289,10 @@ def evaluate(model, state, eval_ds, loss_fn_eval, eval_metrics_cls, config,
 
   metrics_res = eval_metrics.compute()
   writer.write_scalars(
-      step, jax.tree_map(np.array, utils.flatten_named_dicttree(metrics_res)))
+      step, jax.tree.map(np.array, utils.flatten_named_dicttree(metrics_res)))
   writer.write_images(
       step,
-      jax.tree_map(
+      jax.tree.map(
           np.array,
           utils.prepare_images_for_logging(
               config,

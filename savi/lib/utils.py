@@ -24,13 +24,12 @@ import flax
 from flax import linen as nn
 from flax import traverse_util
 import jax
-from jax.example_libraries import optimizers as jax_optim
 import jax.numpy as jnp
-import jax.ops
 import matplotlib
 import matplotlib.pyplot as plt
 import ml_collections
 import numpy as np
+import optax
 import skimage.transform
 from savi.lib import metrics
 import tensorflow as tf
@@ -47,8 +46,9 @@ MetricSpec = Dict[str, str]
 class TrainState:
   """Data structure for checkpointing the model."""
   step: int
-  optimizer: flax.optim.Optimizer  # pytype: disable=module-attr
-  variables: flax.core.FrozenDict
+  params: Any
+  opt_state: Any
+  variables: Any
   rng: PRNGKey
 
 
@@ -85,8 +85,6 @@ def flatten_named_dicttree(metrics_res: DictTree, sep: str = "/"):
 def clip_grads(grad_tree: ArrayTree, max_norm: float, epsilon: float = 1e-6):
   """Gradient clipping with epsilon.
 
-  Adapted from jax.example_libraries.optimizers.clip_grads.
-
   Args:
     grad_tree: ArrayTree of gradients.
     max_norm: A float, clip gradients above this maximum norm.
@@ -95,10 +93,10 @@ def clip_grads(grad_tree: ArrayTree, max_norm: float, epsilon: float = 1e-6):
   Returns:
     ArrayTree of clipped gradients.
   """
-  norm = jax_optim.l2_norm(grad_tree)
+  norm = optax.global_norm(grad_tree)
   clip_coef = max_norm / (norm + epsilon)
   normalize = lambda g: jnp.where(clip_coef < 1., g * clip_coef, g)
-  return jax.tree_map(normalize, grad_tree)
+  return jax.tree.map(normalize, grad_tree)
 
 
 def spatial_broadcast(x: Array, resolution: Sequence[int]) -> Array:
@@ -175,8 +173,8 @@ def prepare_images_for_logging(
   # Converts all tensors to numpy arrays to run everything on CPU as JAX
   # eager mode is inefficient and because memory usage from these ops may
   # lead to OOM errors.
-  batch = jax.tree_map(np.array, batch)
-  preds = jax.tree_map(np.array, preds)
+  batch = jax.tree.map(np.array, batch)
+  preds = jax.tree.map(np.array, preds)
 
   if n_samples <= 0:
     return images
@@ -184,17 +182,17 @@ def prepare_images_for_logging(
   if not first_replica_only:
     # Move the two leading batch dimensions into a single dimension. We do this
     # to plot the same number of examples regardless of the data parallelism.
-    batch = jax.tree_map(lambda x: np.reshape(x, (-1,) + x.shape[2:]), batch)
-    preds = jax.tree_map(lambda x: np.reshape(x, (-1,) + x.shape[2:]), preds)
+    batch = jax.tree.map(lambda x: np.reshape(x, (-1,) + x.shape[2:]), batch)
+    preds = jax.tree.map(lambda x: np.reshape(x, (-1,) + x.shape[2:]), preds)
   else:
-    batch = jax.tree_map(lambda x: x[0], batch)
-    preds = jax.tree_map(lambda x: x[0], preds)
+    batch = jax.tree.map(lambda x: x[0], batch)
+    preds = jax.tree.map(lambda x: x[0], preds)
 
   # Limit the tensors to n_samples and n_frames.
-  batch = jax.tree_map(
+  batch = jax.tree.map(
       lambda x: x[:n_samples, :n_frames] if x.ndim > 2 else x[:n_samples],
       batch)
-  preds = jax.tree_map(
+  preds = jax.tree.map(
       lambda x: x[:n_samples, :n_frames] if x.ndim > 2 else x[:n_samples],
       preds)
 
@@ -227,7 +225,7 @@ def prepare_images_for_logging(
   if preds is not None and "intermediates" in preds:
 
     logging.info("intermediates: %s",
-                 jax.tree_map(shape_fn, preds["intermediates"]))
+                 jax.tree.map(shape_fn, preds["intermediates"]))
 
     for key, path in config.debug_var_video_paths.items():
       log_vars = retrieve_from_collection(preds["intermediates"], path)
@@ -422,10 +420,18 @@ def visualize_image_dict(images: Dict[str, Array], plot_scale: int = 10):
 
 
 def filter_key_from_frozen_dict(
-    frozen_dict: flax.core.FrozenDict, key: str) -> flax.core.FrozenDict:
-  """Filters (removes) an item by key from a flax.core.FrozenDict."""
+    frozen_dict, key: str):
+  """Filters (removes) an item by key from a FrozenDict or dict."""
   if key in frozen_dict:
-    frozen_dict, _ = frozen_dict.pop(key)
+    if hasattr(frozen_dict, 'pop') and callable(getattr(frozen_dict, 'pop')):
+      # FrozenDict.pop returns (new_dict, value)
+      result = frozen_dict.pop(key)
+      if isinstance(result, tuple):
+        frozen_dict = result[0]
+      else:
+        frozen_dict = result
+    else:
+      frozen_dict = {k: v for k, v in frozen_dict.items() if k != key}
   return frozen_dict
 
 
