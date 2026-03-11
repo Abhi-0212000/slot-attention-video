@@ -197,11 +197,19 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
   state = flax.jax_utils.replicate(state, devices=jax.local_devices())
   del rng  # rng is stored in the state.
 
+  # Fix TF profiler compat: enabled is a bool instead of callable in some
+  # TF versions, which crashes clu's TF SummaryWriter.
+  try:
+    import tensorflow.python.profiler.trace as _tf_trace
+    if not callable(getattr(_tf_trace, "enabled", None)):
+      _orig = _tf_trace.enabled
+      _tf_trace.enabled = lambda: _orig
+  except ImportError:
+    pass
+
   # Only write metrics on host 0, write to logs on all other hosts.
-  # Use logging-only to avoid TF/TB version incompatibility with latest JAX.
-  # Pipe output through `tee` to save logs: python -m savi.main ... 2>&1 | tee train.log
   writer = metric_writers.create_default_writer(
-      workdir, just_logging=True)
+      workdir, just_logging=jax.process_index() > 0)
   writer.write_hparams(utils.prepare_dict_for_logging(config.to_dict()))
 
   logging.info("Starting training loop at step %d.", initial_step)
