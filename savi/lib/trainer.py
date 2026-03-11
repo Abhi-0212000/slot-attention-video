@@ -44,8 +44,8 @@ PRNGKey = Array
 
 
 def train_step(
-    model: nn.Module,
     tx: optax.GradientTransformation,
+    model: nn.Module,
     rng: PRNGKey,
     step: int,
     state_vars: Dict[str, ArrayTree],
