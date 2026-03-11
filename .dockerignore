@@ -1,0 +1,9 @@
+.git
+__pycache__
+*.pyc
+*.egg-info
+.venv
+tmp/
+wandb/
+*.ckpt
+trossen_red_cube_lift/demo_videos/

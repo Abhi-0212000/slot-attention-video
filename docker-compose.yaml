@@ -1,0 +1,21 @@
+services:
+  savi:
+    build: .
+    container_name: savi_gpu_env
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/workspace/my_data
+    working_dir: /workspace/slot-attention-video
+    # Expose the GPU to the container via NVIDIA Container Toolkit
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

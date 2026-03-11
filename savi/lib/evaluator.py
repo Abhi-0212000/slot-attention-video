@@ -294,7 +294,7 @@ def evaluate(
 
   for batch in eval_ds:
     rng, eval_rng = jax.random.split(rng)
-    eval_rng = jax.random.fold_in(eval_rng, jax.host_id())  # Bind to host.
+    eval_rng = jax.random.fold_in(eval_rng, jax.process_index())  # Bind to host.
     eval_rngs = jax.random.split(eval_rng, jax.local_device_count())
     batch = jax.tree_map(np.asarray, batch)
     preds = eval_step(

@@ -63,13 +63,13 @@ def get_batch_dims(global_batch_size: int) -> List[int]:
       number of devices.
   """
   num_local_devices = jax.local_device_count()
-  if global_batch_size % jax.host_count() != 0:
+  if global_batch_size % jax.process_count() != 0:
     raise ValueError(f"Global batch size {global_batch_size} not evenly "
-                     f"divisble with {jax.host_count()}.")
-  per_host_batch_size = global_batch_size // jax.host_count()
+                     f"divisble with {jax.process_count()}.")
+  per_host_batch_size = global_batch_size // jax.process_count()
   if per_host_batch_size % num_local_devices != 0:
     raise ValueError(f"Global batch size {global_batch_size} not evenly "
-                     f"divisible with {jax.host_count()} hosts with a per host "
+                     f"divisible with {jax.process_count()} hosts with a per host "
                      f"batch size of {per_host_batch_size} and "
                      f"{num_local_devices} local devices. ")
   return [num_local_devices, per_host_batch_size // num_local_devices]
