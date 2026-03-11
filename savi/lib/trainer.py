@@ -197,14 +197,19 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
   state = flax.jax_utils.replicate(state, devices=jax.local_devices())
   del rng  # rng is stored in the state.
 
-  # Fix TF profiler compat: enabled is a bool instead of callable in some
-  # TF versions, which crashes clu's TF SummaryWriter.
+  # Fix TF profiler compat: in some TF versions, trace.enabled is a bool
+  # instead of callable, which crashes the trace decorator wrapping
+  # tf.debugging.assert_scalar (called by tensorboard's scalar summary).
+  # We patch at multiple levels to be robust against lazy loading.
   try:
+    import tensorflow as tf
     import tensorflow.python.profiler.trace as _tf_trace
-    if not callable(getattr(_tf_trace, "enabled", None)):
-      _orig = _tf_trace.enabled
-      _tf_trace.enabled = lambda: _orig
-  except ImportError:
+    # Patch module-level enabled to be callable.
+    if hasattr(_tf_trace, "enabled") and not callable(_tf_trace.enabled):
+      _tf_trace.__dict__["enabled"] = lambda: False
+    # Patch assert_scalar to bypass the broken trace decorator.
+    tf.debugging.assert_scalar = lambda data, message=None, name=None: None
+  except Exception:
     pass
 
   # Only write metrics on host 0, write to logs on all other hosts.
