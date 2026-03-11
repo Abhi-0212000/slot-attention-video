@@ -32,7 +32,7 @@ def get_config():
   config.seed = 42
   config.seed_data = True
 
-  config.batch_size = 64
+  config.batch_size = 16
   config.num_train_steps = 100000
 
   # Adam optimizer config.

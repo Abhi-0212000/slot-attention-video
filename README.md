@@ -35,7 +35,10 @@ pip3 install -r requirements.txt
 ```
 to install dependencies and
 ```sh
-python -m savi.main --config savi/configs/movi/savi_conditional_small.py --workdir tmp/
+XLA_FLAGS="--xla_gpu_strict_conv_algorithm_picker=false" python -m savi.main \
+  --config savi/configs/movi/savi_conditional_small.py \
+  --config.batch_size=16 \
+  --workdir tmp/
 ```
 to train the smallest SAVi model (SAVi-S) on the [MOVi-A](https://github.com/google-research/kubric/blob/main/challenges/movi/README.md) dataset.
 
