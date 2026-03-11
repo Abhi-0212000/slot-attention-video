@@ -198,8 +198,10 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
   del rng  # rng is stored in the state.
 
   # Only write metrics on host 0, write to logs on all other hosts.
+  # Use logging-only to avoid TF/TB version incompatibility with latest JAX.
+  # Pipe output through `tee` to save logs: python -m savi.main ... 2>&1 | tee train.log
   writer = metric_writers.create_default_writer(
-      workdir, just_logging=jax.process_index() > 0)
+      workdir, just_logging=True)
   writer.write_hparams(utils.prepare_dict_for_logging(config.to_dict()))
 
   logging.info("Starting training loop at step %d.", initial_step)
