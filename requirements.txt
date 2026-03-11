@@ -1,14 +1,13 @@
-# Latest versions — compatible with CUDA 13.0 / cuDNN 9.
-# JAX is installed separately in Dockerfile (with cuda13 extra).
+# Latest versions — compatible with CUDA 12.8 / cuDNN 9.
+# JAX is installed separately in Dockerfile (with cuda12 extra).
 flax>=0.8.0
 absl-py>=0.12.0
 numpy>=1.21.5,<2.0
-# Pinned to 2.14.0 to avoid the profiler 'bool' bug in TF 2.15
-tensorflow-cpu==2.14.0
+tensorflow-cpu>=2.15.0
 tensorflow-datasets>=4.4.0
 matplotlib>=3.5.0
 clu>=0.0.9
-tensorboard==2.14.0
+tensorboard>=2.15.0
 chex>=0.1.8
 optax>=0.2.0
 ml-collections==0.1.0
